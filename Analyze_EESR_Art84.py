@@ -149,6 +149,17 @@ def download_esop_from_register(driver, app_number, download_dir):
         if new_window:
             driver.switch_to.window(new_window)
             
+            # --- PowerShell 디버깅용 UI 상태 브리핑 ---
+            time.sleep(2) # UI가 DOM에 안착할 약간의 대기
+            page_title = driver.title
+            has_load_all = len(driver.find_elements(By.XPATH, "//a[contains(text(), 'Load all pages') or @id='loadAllPages']")) > 0
+            has_download = len(driver.find_elements(By.XPATH, "//button[@title='Download'] | //a[@title='Download'] | //*[@id='download']")) > 0
+            has_open = len(driver.find_elements(By.XPATH, "//*[normalize-space(text())='열기' or contains(text(), '열기') or normalize-space(text())='Open']")) > 0
+            print(f"  -> [UI 탐색망] 뷰어 감지 완료 (제목: '{page_title}')")
+            print(f"     |-- 'Load all pages' 버튼 존재 여부: {has_load_all}")
+            print(f"     |-- '#'Download' 버튼 존재 여부   : {has_download}")
+            print(f"     |-- '열기(Open)' 버튼 존재 여부    : {has_open}")
+            # ------------------------------------------
             # 1. 'Load all pages' 버튼 클릭 시도 (1페이지짜리 문서면 버튼이 없을 확률 99%)
             try:
                 # 뷰어 로딩이 느릴 수 있으므로 12~15초 넉넉하게 대기
