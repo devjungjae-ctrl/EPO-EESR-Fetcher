@@ -1,29 +1,41 @@
 import os
 import re
-import pandas as pd
-import requests
-import base64
 import time
-import google.generativeai as genai
+import base64
+import requests
+import xml.etree.ElementTree as ET
+import pandas as pd
 import fitz  # PyMuPDF
+import google.generativeai as genai
 
 # ==========================================
 # 0. API & 환경 설정
 # ==========================================
-# Gemini API Key (제공해주신 키 연동 완료)
-GEMINI_API_KEY = "발급받은_GEMINI_API_KEY_여기에_붙여넣기"
-
-# EPO OPS API Key (별도로 발급받으신 Key/Secret 기입 필요)
-# 발급 사이트: developers.epo.org
-# 참고: 브라우저 에이전트로 인한 IP 차단 이슈로 부득이 직접 기입하시도록 공란으로 비워두었습니다.
-EPO_CONSUMER_KEY = "여기에_CONSUMER_KEY_입력"
-EPO_CONSUMER_SECRET = "여기에_CONSUMER_SECRET_입력"
-# ==========================================
-
+# 1) Google Gemini API 
+# 실제 구동을 위해 환경 변수나 로컬 파일에서 읽도록 세팅 (Github 유출 방지)
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "발급받은_GEMINI_API_KEY_여기에_붙여넣기")
 genai.configure(api_key=GEMINI_API_KEY)
-# 모델 선택 (텍스트 분류/분석에 뛰어난 1.5-flash-latest 사용)
 gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest')
 
+# 2) EPO OPS API 
+EPO_CONSUMER_KEY = os.environ.get("EPO_CONSUMER_KEY", "발급받은_EPO_APP_KEY")
+EPO_CONSUMER_SECRET = os.environ.get("EPO_CONSUMER_SECRET", "발급받은_EPO_SECRET_KEY")
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DOWNLOAD_DIR = os.path.join(BASE_DIR, "EESR_Downloads_API")
+if not os.path.exists(DOWNLOAD_DIR):
+    os.makedirs(DOWNLOAD_DIR)
+
+# XML 네임스페이스 매핑
+NS = {
+    'ops': 'http://ops.epo.org',
+    'xlink': 'http://www.w3.org/1999/xlink',
+    'exch': 'http://www.epo.org/exchange'
+}
+
+# ==========================================
+# 1. EPO OPS 통신 모듈
+# ==========================================
 def get_epo_token(client_id, client_secret):
     """EPO OPS API OAuth 토큰 발급"""
     try:
@@ -40,163 +52,198 @@ def get_epo_token(client_id, client_secret):
         response.raise_for_status()
         return response.json().get("access_token")
     except Exception as e:
-        print(f"[ERROR] EPO 토큰 발급 실패 (API 키 설정을 확인하세요): {e}")
+        print(f"[ERROR] EPO 토큰 발급 실패: {e}")
         return None
 
-def download_eesr_pdf(app_number, token, save_dir):
-    """
-    EPO OPS에서 EESR PDF 문서를 다운로드하는 함수 로직.
-    실제 현업에서는 EPO OPS의 Published Data 또는 Global Dossier API를 통해 문서 ID를 찾아와야 합니다.
-    """
-    if not token:
-        return None
+def find_publication_for_application(app_number, token):
+    """출원번호(예: 18817854)를 이용해 공개/등록 문헌번호 및 Kind 코드 추출"""
+    url = f"http://ops.epo.org/3.2/rest-services/published-data/search"
+    headers = {'Authorization': f'Bearer {token}', 'Accept': 'application/xml'}
+    # 파라미터로 출원번호 매핑 방어식 구성 (예: ap=EP18817854)
+    query_num = app_number if str(app_number).upper().startswith("EP") else f"EP{app_number}"
+    
+    response = requests.get(url, headers=headers, params={'q': f'ap={query_num}'})
+    if response.status_code != 200:
+        return None, None
         
-    pdf_path = os.path.join(save_dir, f"{app_number}_EESR.pdf")
-    
-    # [개발 로직 가이드] 
-    # 1. biblio Search API를 통해 해당 출원번호의 document ID 리스트업
-    # 2. Description이 "Search Report" 또는 EESR인 document ID 파악
-    # 3. images API를 통해 다운로드 및 병합하여 PDF로 조합
-    
-    print(f"  -> [{app_number}] EPO API 연동하여 PDF 다운로드 진행 중 (구조화됨)...")
-    
-    if os.path.exists(pdf_path):
-        return pdf_path
-    return None 
-
-def extract_pdf_text_and_check_art84(pdf_path):
-    """PDF에서 텍스트를 추출하고 Article 84 언급 여부를 다각적 정규표현식으로 확인"""
     try:
-        doc = fitz.open(pdf_path)
-        full_text = ""
-        for page in doc:
-            full_text += page.get_text("text") + "\n"
-        doc.close()
-        
-        # 확장된 Article 84 정규식 향상 (Art. 84, Article 84, Art84, A. 84, A.84 등 포괄)
-        pattern = r"\b(?:Article|Art\.?|A\.?)\s*84\b"
-        if re.search(pattern, full_text, re.IGNORECASE):
-            return True, full_text
-        else:
-            return False, full_text
-            
+        root = ET.fromstring(response.content)
+        # 첫 번째 검색결과의 doc-number 및 kind 획득
+        doc_element = root.find('.//ops:search-result/ops:publication-reference/exch:document-id[@document-id-type="docdb"]', NS)
+        if doc_element is not None:
+            doc_num = doc_element.find('exch:doc-number', NS).text
+            kind = doc_element.find('exch:kind', NS).text
+            return doc_num, kind
     except Exception as e:
-        print(f"[ERROR] PDF 파싱 에러({pdf_path}): {e}")
-        return False, ""
+        print(f"   [오류] 문헌번호 파싱 실패: {e}")
+    return None, None
 
-def classify_art84_with_gemini(text):
-    """Gemini API를 사용하여 분류 작업 수행"""
+def get_image_details_for_publication(doc_num, kind, token):
+    """문헌번호를 통해 EESR이 포함될 가능성이 높은 문헌 원본의 이미지 다운로드 링크 목록 확보"""
+    url = f"http://ops.epo.org/3.2/rest-services/published-data/publication/docdb/EP.{doc_num}.{kind}/images"
+    headers = {'Authorization': f'Bearer {token}', 'Accept': 'application/xml'}
+    
+    response = requests.get(url, headers=headers)
+    if response.status_code != 200:
+        return None, None
+
+    try:
+        root = ET.fromstring(response.content)
+        # SearchReport 또는 FullDocument 추출
+        # 보통 SearchReport가 분리된 A3나, FullDocument 끝에 붙은 형태(A1)를 스캔
+        link = None
+        pages = 0
+        
+        for instance in root.findall('.//ops:document-instance', NS):
+            desc = instance.attrib.get('desc')
+            if desc in ('SearchReport', 'FullDocument'):
+                link = instance.attrib.get('link')
+                pages = int(instance.attrib.get('number-of-pages', 0))
+                if desc == 'SearchReport':
+                   break # SearchReport 전용 문서가 있으면 최고 우선순위
+                   
+        return link, pages
+    except Exception as e:
+        print(f"   [오류] 문서 이미지 탐색 실패: {e}")
+    return None, None
+
+def download_eesr_pdf_from_ops(app_number, token, save_dir):
+    """
+    EPO OPS 표준 로직에 따라 문서를 스캔하고 다운로드합니다.
+    (API 트래픽 제한을 위해 EESR이 위치하는 문서의 페이지들을 합병하거나 텍스트 직접 축출)
+    """
+    print(f"  -> [{app_number}] EPO OPS API 서지 매핑 중...")
+    app_num_clean = str(app_number).split('.')[0]
+    
+    doc_num, kind = find_publication_for_application(app_num_clean, token)
+    if not doc_num or not kind:
+        print(f"  -> 공개 문헌을 찾을 수 없습니다. (EPO 서버에 존재하지 않음)")
+        return None
+        
+    print(f"  -> 문헌 확인됨: EP{doc_num}{kind}. 원본 문서 구조 파악 중...")
+    link, max_pages = get_image_details_for_publication(doc_num, kind, token)
+    
+    if not link or max_pages == 0:
+        print(f"  -> 다운로드 가능한 원본(EESR) 링크가 존재하지 않습니다.")
+        return None
+        
+    print(f"  -> 문서 획득 중 (총 {max_pages} 페이지). PDF 텍스트 추출 조립 중...")
+    
+    # 트래픽 및 시간 한계상 EESR은 보통 후반 부 페이지(최대 5페이지)에 위치.
+    # WIPO/EPO 규격에 따라 FullDocument의 경우 마지막 1~5 페이지만 뽑고, SearchReport면 전부 뽑습니다.
+    target_pages = []
+    if "search-report" in link.lower() or max_pages <= 6:
+        # 분리형 리포트거나, 페이지가 매우 적으면 처음부터 끝까지 추출
+        target_pages = range(1, max_pages + 1)
+    else:
+        # A1 문헌 등 페이지가 10장이 넘어가면 뒷부분에 EESR 존재
+        start_page = max(1, max_pages - 4)
+        target_pages = range(start_page, max_pages + 1)
+
+    full_text_extracted = ""
+    headers = {'Authorization': f'Bearer {token}', 'Accept': 'application/pdf'}
+    
+    for page in target_pages:
+        page_url = f"http://ops.epo.org/3.2/rest-services/{link}?Range={page}"
+        res = requests.get(page_url, headers=headers)
+        if res.status_code == 200:
+            try:
+                # Byte Stream에서 바로 텍스트 추출 (디스크 I/O 최적화)
+                doc = fitz.Document(stream=res.content, filetype="pdf")
+                for p in doc:
+                    full_text_extracted += p.get_text("text") + "\n"
+                doc.close()
+            except:
+                pass
+        time.sleep(0.5) # 초당 OPS Rate Limit 방어
+
+    # 병합된 텍스트가 의미 있는 수준인지 확인
+    if len(full_text_extracted) > 100:
+        return full_text_extracted
+    else:
+        return None
+
+# ==========================================
+# 2. NLP (Gemini) 분기 처리
+# ==========================================
+def analyze_with_gemini(text):
     prompt = f"""
-    당신은 유럽 특허법(EPC)을 다루는 전문 특허 번역가이자 변리사입니다.
-    아래는 Extended European Search Report (EESR) 문서의 일부 텍스트입니다.
-    해당 문서들에는 'Article 84' (또는 A.84, Art. 84) 거절 사유가 명시되어 있습니다.
+    아래는 유럽 특허청(EPO)의 Search Report 또는 관련 오피스 액션의 추출 텍스트입니다.
+    이 텍스트에 "Article 84" (또는 Art 84, A. 84, A84 등) 법규에 기반한 거절 또는 지적 사항이 명시되어 있는지 파악하고,
+    있다면 반드시 아래 4가지 중 **정확히 하나**로만 대답하세요. 부연 설명은 1문장으로만 추가하세요.
+    없다면 "Article 84 없음" 이라고 답하세요.
     
-    주어진 텍스트를 분석하여, 거절 사유를 다음 4가지 종류 중 **정확히 하나**로만 분류해주세요.
-    응답은 반드시 "종류 X" 포맷으로 시작하고, 그 뒤에 짧고 명확한 근거(1~2문장)를 한국어로 작성하세요.
-
-    [분류 기준]
-    종류 1. 명확성 부족 (Lack of Clarity): "about", "substantially", "suitable" 등 모호하거나 불확실한 상대적 용어 사용, 선택적 특징 표기, 또는 핵심적 특징(Essential features) 결여.
-    종류 2. 명세서에 의한 뒷받침 부족 (Lack of Support): 청구항과 명세서 내용 불일치(Inconsistency), 발명 범위 초과 등 일치성 위반.
-    종류 3. 간결성 및 청구항 수 (Conciseness & Number of Claims): 독립항 과다(Rule 62a) 또는 청구항 중복으로 권리 범위 파악 곤란 (Rule 29(5) 위반 동반 등).
-    종류 4. 기타: 위 3가지에 명확히 해당하지 않는 기타 유형.
-
-    [문서 텍스트]
-    {text[:8000]}  # 텍스트 앞부분 위주로 전송 (근거 문장 파악용)
+    1. 명확성 부족 (Lack of Clarity)
+    2. 명세서에 의한 뒷받침 부족 (Lack of Support)
+    3. 간결성 및 청구항 수 (Conciseness & Number of Claims)
+    4. 기타 (Other)
+    
+    [텍스트 추출본 (요약)]
+    {text[-8000:]}
     """
-
     try:
-        response = gemini_model.generate_content(prompt)
-        return response.text.strip()
+        res = gemini_model.generate_content(prompt)
+        text_result = res.text.strip()
+        if "명확성 부족" in text_result or "Lack of Clarity" in text_result: return "명확성 부족"
+        elif "뒷받침 부족" in text_result or "Lack of Support" in text_result: return "뒷받침 부족"
+        elif "간결성" in text_result or "Conciseness" in text_result: return "간결성"
+        elif "기타" in text_result or "Other" in text_result: return "기타"
+        else: return "Article 84 없음"
     except Exception as e:
-        print(f"[ERROR] Gemini API 오류: {e}")
-        return "분류 에러"
+        return f"분류 에러 ({e})"
 
+# ==========================================
+# 3. Main Routine
+# ==========================================
 def main():
-    desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
-    excel_path = os.path.join(desktop_path, "특허검색_EESR검색.xlsx")
-    output_excel_path = os.path.join(desktop_path, "특허검색_EESR검색_분류결과.xlsx")
-    pdf_save_dir = os.path.join(desktop_path, "EESR_Downloads")
+    print("==========================================================")
+    print(" EPO OPS 개발자 API 기반 EESR 파이프라인 가동 준비 중... ")
+    print("==========================================================")
     
-    os.makedirs(pdf_save_dir, exist_ok=True)
-    
+    excel_path = os.path.join(BASE_DIR, '..', '특허검색_EESR검색.xlsx')
     if not os.path.exists(excel_path):
-        print(f"[ERROR] 바탕화면에 '{os.path.basename(excel_path)}' 파일이 없습니다!")
-        # 테스트 실행을 막지 않기 위해 함수를 바로 종료하지는 않고 모의 진행 안내
-        print("[INFO] [테스트 모드]: 샘플 Dataframe을 생성하여 진행합니다.")
-        df = pd.DataFrame({'출원번호': ['EP20123456', 'EP20987654']})
+        df = pd.DataFrame({'출원번호': ['18817854.5']})
     else:
-        print("엑셀 파일을 불러오는 중...")
         df = pd.read_excel(excel_path)
-    
-    # 엑셀 열에 출원번호가 있는지 체크 ('출원번호' 로 가정)
-    col_app = None
-    for col in df.columns:
-        if "출원" in str(col) or "Application" in str(col):
-            col_app = col
-            break
-            
-    if not col_app:
-        print("[ERROR] '출원번호' 관련 열을 찾을 수 없습니다. (열 이름 확인 필요)")
+        
+    if '거절사유_분류(EPO_API)' not in df.columns:
+        df['거절사유_분류(EPO_API)'] = ""
+        
+    # 토큰 발급
+    print("[시스템] EPO OPS OAuth 토큰 요청 중...")
+    token = get_epo_token(EPO_CONSUMER_KEY, EPO_CONSUMER_SECRET)
+    if not token:
+        print("[시스템 에러] API 토큰 발급에 실패하여 프로그램을 종료합니다.")
         return
-
-    # 결과 저장을 위한 빈 열 생성
-    if 'Article84_여부' not in df.columns:
-        df['Article84_여부'] = "조사안됨"
-    if '거절사유_유형분류' not in df.columns:
-        df['거절사유_유형분류'] = ""
-
-    # EPO Token 발급
-    print("\n[EPO 토큰 발급 시도 중...]")
-    epo_token = get_epo_token(EPO_CONSUMER_KEY, EPO_CONSUMER_SECRET)
-    if epo_token:
-        print("[OK] EPO 토큰 발급 성공!")
-    else:
-        print("[WARNING] EPO 토큰 값이 유효하지 않아 로컬 폴더(EESR_Downloads) 내 다운로드된 PDF만 검사합니다.")
-
+    print("[시스템] EPO Token 획득 성공! 파싱 궤도에 진입합니다.\n")
+    
     for idx, row in df.iterrows():
-        app_number = str(row[col_app]).strip()
-        if not app_number or app_number == 'nan':
+        app_num = str(row['출원번호']).strip()
+        if not app_num or app_num.lower() == 'nan': continue
+        
+        print(f"[진행도: {idx+1}/{len(df)}] EPO 문헌 탐색: {app_num}")
+        
+        extracted_text = download_eesr_pdf_from_ops(app_num, token, DOWNLOAD_DIR)
+        
+        if extracted_text is None:
+            df.at[idx, '거절사유_분류(EPO_API)'] = "탐색 불가 (자료 없음)"
             continue
             
-        print(f"\n[Run] [{idx+1}/{len(df)}] 타겟 출원번호: {app_number}")
-        
-        # 1. EESR PDF 다운로드 (API 또는 로컬 파일)
-        pdf_file = download_eesr_pdf(app_number, epo_token, pdf_save_dir)
-        
-        # 다운로드를 못했더라도 EESR_Downloads 폴더에 파일이 손수 있으면 읽도록 fallback
-        fallback_pdf = os.path.join(pdf_save_dir, f"{app_number}.pdf")
-        if not pdf_file and os.path.exists(fallback_pdf):
-            pdf_file = fallback_pdf
-            
-        if not pdf_file:
-            print("  -> EESR PDF 문서를 다운로드/찾을 수 없어 Skip 합니다.")
-            df.at[idx, 'Article84_여부'] = "PDF없음"
-            continue
-            
-        # 2. PDF 파싱 및 Article 84 체크
-        is_art84, extract_txt = extract_pdf_text_and_check_art84(pdf_file)
-        
-        if is_art84:
-            print("  -> [HIT] Article 84 (A.84 등) 관련 거절 발견! Gemini 분류 시작...")
-            df.at[idx, 'Article84_여부'] = "존재(Yes)"
-            
-            # 3. Gemini로 분류 (API 속도 제한 고려 delay)
-            time.sleep(2)
-            class_result = classify_art84_with_gemini(extract_txt)
-            print(f"  -> {class_result[:60]}...")
-            df.at[idx, '거절사유_유형분류'] = class_result
-            
+        # Article 84 존재 유무 스캐닝
+        pattern = r"\b(?:Article|Art\.?|A\.?)\s*84\b"
+        if re.search(pattern, extracted_text, re.IGNORECASE):
+            print("  -> [HIT] Article 84 검출! Gemini AI 분석 요청 중...")
+            time.sleep(2) # Gemini 제어 Limit 보호
+            cls_result = analyze_with_gemini(extracted_text)
+            print(f"  -> 분석 결과: {cls_result}")
+            df.at[idx, '거절사유_분류(EPO_API)'] = cls_result
         else:
-            print("  -> 기술된 텍스트 중 Article 84 거절 조항이 없어 패스합니다.")
-            df.at[idx, 'Article84_여부'] = "없음(No)"
-            df.at[idx, '거절사유_유형분류'] = "Skip"
-            
-    # 최종 결과 저장
-    try:
-        df.to_excel(output_excel_path, index=False)
-        print(f"\n[OK] 완료! 결과 파일이 저장되었습니다: {output_excel_path}")
-    except Exception as e:
-        print(f"[ERROR] 엑셀 저장 실패: {e}")
+            print("  -> [PASS] Article 84 거절 사유가 문서에 존재하지 않습니다.")
+            df.at[idx, '거절사유_분류(EPO_API)'] = "거절이력 없음"
+                
+    result_path = os.path.join(BASE_DIR, '특허검색_EESR검색_EPO_API_결과.xlsx')
+    df.to_excel(result_path, index=False)
+    print(f"\n[성공] EPO 공식 플랫폼 기반 추출이 완료되었습니다: {result_path}")
 
 if __name__ == "__main__":
     main()
