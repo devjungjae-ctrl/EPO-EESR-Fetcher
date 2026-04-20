@@ -151,8 +151,9 @@ def download_esop_from_register(driver, app_number, download_dir):
             
             # 1. 'Load all pages' 버튼 클릭 시도 (1페이지짜리 문서면 버튼이 없을 확률 99%)
             try:
-                short_wait = WebDriverWait(driver, 5) # 5초만 빠르게 스캔
-                load_btn = short_wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Load all pages') or @id='loadAllPages']")))
+                # 뷰어 로딩이 느릴 수 있으므로 12~15초 넉넉하게 대기
+                viewer_wait = WebDriverWait(driver, 15)
+                load_btn = viewer_wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Load all pages') or @id='loadAllPages']")))
                 driver.execute_script("arguments[0].click();", load_btn)
                 print("  -> [성공] 'Load all pages' 버튼 클릭 완료. 전체 페이지 렌더링 중...")
                 time.sleep(random.uniform(3.0, 4.5)) # 전체 페이지 렌더링을 위한 무작위 대기
