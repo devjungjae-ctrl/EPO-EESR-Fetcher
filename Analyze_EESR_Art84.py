@@ -118,13 +118,32 @@ def download_esop_from_register(driver, app_number, download_dir):
         # 클릭 전 현재 파일 상태 확보
         before_download_count = len(glob.glob(os.path.join(download_dir, '*.pdf')))
         
-        # 다운로드 클릭 (새 탭에서 열릴 수 있으므로 강제 처리)
-        # 종종 a 태그가 클릭이 막혀있을 수 있으므로 직접 JS로 클릭
+        # 뷰어 열기 (새 탭에서 열림)
         driver.execute_script("arguments[0].click();", esop_link)
-        print("  -> 문서 강제 추출(PDF 다운로드) 개시...")
+        print("  -> 문서 뷰어 새 탭 대기 중...")
         
+        time.sleep(3)
+        if len(driver.window_handles) > 1:
+            driver.switch_to.window(driver.window_handles[-1])
+            try:
+                # 'Load all pages' 버튼 클릭
+                load_btn = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "a.load[title='Load all pages']")))
+                driver.execute_script("arguments[0].click();", load_btn)
+                print("  -> [성공] 'Load all pages' 버튼 클릭 완료. 전체 페이지 렌더링 중...")
+                time.sleep(3) # 전체 페이지 렌더링 대기
+                
+                # '#download' 버튼 클릭 (뷰어 상단의 내려받기 아이콘)
+                down_btn = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "#download")))
+                driver.execute_script("arguments[0].click();", down_btn)
+                print("  -> 문서 강제 추출(PDF 다운로드) 개시...")
+            except Exception as e:
+                print(f"  -> [경고] 뷰어 제어 중 오류 (단일 페이지이거나 로딩 지연): {str(e)[:40]}")
+        else:
+            print("  -> (새 창이 열리지 않음) PDF 플러그인 즉시 다운로드 대기 측면으로 진행...")
+
         # 크롬이 문서를 다운받을 때까지 대기
         time.sleep(2)
+        resolved_path = None
         if wait_for_download(download_dir):
             time.sleep(1) # 최종 저장 딜레이
             latest_pdf = get_latest_pdf(download_dir)
@@ -137,11 +156,14 @@ def download_esop_from_register(driver, app_number, download_dir):
                 # 만약 방금 받아진 PDF라면 이름 변경
                 if len(glob.glob(os.path.join(download_dir, '*.pdf'))) > before_download_count:
                     os.rename(latest_pdf, new_name)
-                    return new_name
-                else:
-                    # 다운로드가 안 된 거라면
-                    return None
-        return None
+                    resolved_path = new_name
+                    
+        # 뷰어 팝업창 닫고 메인으로 복귀
+        if len(driver.window_handles) > 1:
+            driver.close()
+            driver.switch_to.window(driver.window_handles[0])
+            
+        return resolved_path
     except Exception as e:
         print(f"  -> 시스템 오류 발생: {str(e)[:50]}...")
         return None
