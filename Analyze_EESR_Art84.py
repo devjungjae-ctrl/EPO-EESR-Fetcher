@@ -157,7 +157,7 @@ def download_esop_from_register(driver, app_number, download_dir):
         
         # 새 창 핸들 획득 및 전환 (안전 처리를 통해 list index out of range 방지)
         new_window_matches = [h for h in driver.window_handles if h != original_window]
-        new_window = new_window_matches[0] if new_window_matches else None
+        new_window = new_window_matches[-1] if new_window_matches else None
         
         if new_window:
             driver.switch_to.window(new_window)
@@ -243,12 +243,17 @@ def download_esop_from_register(driver, app_number, download_dir):
                     os.rename(latest_pdf, new_name)
                     resolved_path = new_name
                     
-        # 뷰어 팝업창 닫고 메인으로 복귀
-        if len(driver.window_handles) > 1:
-            try:
-                driver.execute_script("window.close();") # Webdriver close() 행 유발 버그 방지
-            except:
-                pass
+        # 뷰어 팝업창 닫고 메인으로 복귀 (모든 잔여 탭 완벽 정리)
+        for h in driver.window_handles:
+            if h != original_window:
+                try:
+                    driver.switch_to.window(h)
+                    driver.execute_script("window.close();") # Webdriver close() 행 유발 버그 방지
+                except:
+                    pass
+        try:
+            driver.switch_to.window(original_window)
+        except:
             driver.switch_to.window(driver.window_handles[0])
             
         return resolved_path
