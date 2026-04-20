@@ -76,7 +76,7 @@ def get_latest_pdf(download_dir):
 # ==========================================
 # 2. EPO Register 자동화 봇 동작 시퀀스
 # ==========================================
-def download_esop_from_register(driver, app_number, download_dir):
+def download_esop_from_register(driver, app_number, lg_ref, download_dir):
     """
     register.epo.org 에 접속하여 'European search opinion' 문서를 찾아냅니다.
     """
@@ -257,8 +257,8 @@ def download_esop_from_register(driver, app_number, download_dir):
             time.sleep(1) # 최종 저장 딜레이
             latest_pdf = get_latest_pdf(download_dir)
             if latest_pdf:
-                # 최신 PDF를 우리가 원하는 출원번호 형태로 저장
-                new_name = os.path.join(download_dir, f"{app_num_clean}_ESOP_Original.pdf")
+                # 최신 PDF를 우리가 원하는 출원번호_LGREF 형태로 저장
+                new_name = os.path.join(download_dir, f"{app_num_clean}_{lg_ref}_ESOP_Original.pdf")
                 if os.path.exists(new_name):
                     try: os.remove(new_name)
                     except: pass
@@ -357,17 +357,18 @@ def main():
     try:
         for idx, row in df.iterrows():
             raw_app_num = str(row['출원번호']).strip()
+            raw_lg_ref = str(row['LG REF']).strip()
             if not raw_app_num or raw_app_num.lower() == 'nan': continue
             
-            print(f"\n[진행도: {idx+1}/{len(df)}] 심사 문서 타겟팅: {raw_app_num}")
+            print(f"\n[진행도: {idx+1}/{len(df)}] 심사 문서 타겟팅: {raw_app_num} ({raw_lg_ref})")
             
             # ESOP 문서 다운로드 로직
-            pdf_path = download_esop_from_register(driver, raw_app_num, DOWNLOAD_DIR)
+            pdf_path = download_esop_from_register(driver, raw_app_num, raw_lg_ref, DOWNLOAD_DIR)
             
             # 폴백(수동 저장) 체크
             app_clean = raw_app_num.split('.')[0]
             if not app_clean.startswith("EP"): app_clean = "EP" + app_clean
-            fallback_pdf = os.path.join(DOWNLOAD_DIR, f"{app_clean}_ESOP_Original.pdf")
+            fallback_pdf = os.path.join(DOWNLOAD_DIR, f"{app_clean}_{raw_lg_ref}_ESOP_Original.pdf")
             
             if not pdf_path and os.path.exists(fallback_pdf):
                 pdf_path = fallback_pdf
