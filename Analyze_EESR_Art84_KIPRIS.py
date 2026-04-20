@@ -50,10 +50,15 @@ def get_kipris_dossier_info(app_num):
         # XML 파싱
         root = ET.fromstring(response.content)
         
-        # 에러 체크
+        # 에러 및 결과 체크
         result_code = root.find('.//resultCode')
-        if result_code is not None and result_code.text != '00':
-            print(f"  [오류] KIPRIS API 에러 발생: {root.find('.//resultMsg').text}")
+        result_code_text = result_code.text if result_code is not None else None
+        
+        # resultCode가 아예 비어있거나(None), 정상('00')이 아닐경우
+        if result_code_text != '00':
+            msg = root.find('.//resultMsg')
+            msg_text = msg.text if msg is not None else "결과 없음(빈 XML 반환됨 - 문헌번호 매칭 실패)"
+            print(f"  [경고] KIPRIS API 조회 실패: {msg_text}")
             return False
 
         print(f"[{app_num}] 메타데이터 획득 성공. (추가 OPD 문서 다운로드 로직은 KIPRIS 원문 제공 여부에 따라 구성)")
