@@ -2,6 +2,7 @@ import os
 import re
 import glob
 import time
+import random
 import pandas as pd
 import fitz  # PyMuPDF
 import google.generativeai as genai
@@ -80,12 +81,17 @@ def download_esop_from_register(driver, app_number, download_dir):
         # EPO 포맷화: EP18817854
         app_num_clean = app_num_clean if app_num_clean.startswith('EP') else f"EP{app_num_clean}"
         
+        # IP 차단 방지: 각 크롤링 사이클 시작점(URL 진입 전)에 2~4초의 무작위 휴식 부여
+        delay = random.uniform(2.5, 4.2)
+        print(f"  -> [Anti-Bot] 프로그래매틱 탐지 회피를 위해 {delay:.1f}초 대기 중...")
+        time.sleep(delay)
+        
         print(f"  -> [{app_num_clean}] EPO Register 전면 접속 시도 중...")
         url = f"https://register.epo.org/application?number={app_num_clean}&lng=en&tab=doclist"
         driver.get(url)
         wait = WebDriverWait(driver, 15)
         
-        time.sleep(3) # 쿠키 및 페이지 완전 렌더링 대기
+        time.sleep(random.uniform(2.0, 3.5)) # 페이지 완전 렌더링을 위한 안전한 대기
         
         # 쿠키 허용 팝업 (가끔 발생함)
         try:
@@ -130,7 +136,7 @@ def download_esop_from_register(driver, app_number, download_dir):
                 load_btn = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "a.load[title='Load all pages']")))
                 driver.execute_script("arguments[0].click();", load_btn)
                 print("  -> [성공] 'Load all pages' 버튼 클릭 완료. 전체 페이지 렌더링 중...")
-                time.sleep(3) # 전체 페이지 렌더링 대기
+                time.sleep(random.uniform(3.0, 4.5)) # 전체 페이지 렌더링 넉넉히 대기
                 
                 # '#download' 버튼 클릭 (뷰어 상단의 내려받기 아이콘)
                 down_btn = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "#download")))
