@@ -255,22 +255,17 @@ def main():
     driver = setup_tipis_driver(DOWNLOAD_DIR)
     
     try:
-        # 최초 1회 로그인 대기 (SSO 방어선)
+        # 최초 1회 로그인 수동 대기 (SSO 방어선)
         driver.get("https://tipis.lge.com/")
         print("-----------------------------------------------------------------")
-        print("[핵심] 브라우저 창이 열렸습니다. 40초 내로 사내 SSO 로그인을 통과해주세요!")
-        print("      메인 대시보드(인덱스 화면)가 로딩되면 봇이 스스로 감지합니다.")
+        print("[핵심] 브라우저 창이 열렸습니다. 사내 SSO 로그인을 직접 진행해 주세요!")
+        print("      로그인이 완전히 끝난 후, 메인 화면이 나타나면")
+        print("      이 터미널 창으로 돌아와서 [Enter] 키를 누르세요.")
         print("-----------------------------------------------------------------")
         
-        # 메인 페이지가 렌더링될 때까지 강제 대기 (최대 60초 대기)
-        wait = WebDriverWait(driver, 60)
-        try:
-            # 돋보기 검색 input 창이 나타날 때를 '로그인 통과 완료' 시점으로 간주
-            wait.until(EC.presence_of_element_located((By.XPATH, "//input[@placeholder='Search']")))
-            print("\n[인증 완료] TIPIS 대시보드 진입 확인. 즉시 업무 스크래핑을 개시합니다!\n")
-        except:
-            print("\n[타임아웃] 60초 내에 로그인을 통과하지 못했거나 화면 응답이 없습니다. 봇을 종료합니다.")
-            return
+        input(">>> 로그인을 성공적으로 마치셨다면 터미널 창에서 [Enter] 키를 누르세요...")
+        
+        print("\n[수동 인증 승인] 업무 스크래핑을 개시합니다!\n")
 
         for idx, row in df.iterrows():
             lg_ref = str(row['LG REF']).strip()
