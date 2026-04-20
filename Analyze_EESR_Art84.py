@@ -126,6 +126,19 @@ def download_esop_from_register(driver, app_number, download_dir):
             print("  -> [PASS] 해당 출원에는 아직 등재된 'European search opinion' 문서가 없습니다.")
             return None
             
+        # [NEW] 문서를 열기 전 화면의 테이블에서 'Number of pages' 열을 확인하여 Load all pages 필요 여부를 사전 판독
+        needs_load_all = True
+        try:
+            tds = esop_link.find_elements(By.XPATH, "./ancestor::tr[1]/td")
+            for td in tds:
+                txt = td.text.strip()
+                if txt.isdigit():
+                    needs_load_all = int(txt) > 1
+                    print(f"  -> [사전 분석] 문서 페이지 수 확인: {txt}페이지 (Load all pages 필요: {needs_load_all})")
+                    break
+        except Exception as e:
+            print(f"  -> [경고] 페이지 수 사전 판독 실패, 무조건 Load all pages를 탐색합니다.")
+            
         # 클릭 전 현재 파일 상태 확보
         before_download_count = len(glob.glob(os.path.join(download_dir, '*.pdf')))
         
@@ -175,17 +188,20 @@ def download_esop_from_register(driver, app_number, download_dir):
             if len(frames) > 0 and not (has_load_all or has_download or has_open):
                 print("  -> [분석] 화면 요소가 보이지 않습니다. IFrame 내부를 스캔해야 할 수도 있습니다.")
             # ------------------------------------------
-            # 1. 'Load all pages' 버튼 클릭 시도 (1페이지짜리 문서면 버튼이 없을 확률 99%)
-            try:
-                # 뷰어 로딩이 느릴 수 있으므로 12~15초 넉넉하게 대기
-                viewer_wait = WebDriverWait(driver, 15)
-                load_btn = viewer_wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Load all pages') or @id='loadAllPages']")))
-                driver.execute_script("arguments[0].click();", load_btn)
-                print("  -> [성공] 'Load all pages' 버튼 클릭 완료. 전체 페이지 렌더링 중...")
-                time.sleep(random.uniform(3.0, 4.5)) # 전체 페이지 렌더링을 위한 무작위 대기
-            except:
-                print("  -> [INFO] 'Load all pages' 버튼이 없습니다. (단일 페이지이거나 이미 전체 렌더링 됨)")
-                time.sleep(1)
+            # 1. 'Load all pages' 버튼 클릭 시도
+            if needs_load_all:
+                try:
+                    # 뷰어 로딩이 느릴 수 있으므로 12~15초 넉넉하게 대기
+                    viewer_wait = WebDriverWait(driver, 15)
+                    load_btn = viewer_wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Load all pages') or @id='loadAllPages']")))
+                    driver.execute_script("arguments[0].click();", load_btn)
+                    print("  -> [성공] 'Load all pages' 버튼 클릭 완료. 전체 페이지 렌더링 중...")
+                    time.sleep(random.uniform(3.0, 4.5)) # 전체 페이지 렌더링을 위한 무작위 대기
+                except:
+                    print("  -> [INFO] 'Load all pages' 버튼이 없습니다. (사전 분석과 달리 버튼이 등장하지 않음)")
+                    time.sleep(1)
+            else:
+                print("  -> [INFO] 1페이지짜리 문서이므로 'Load all pages' 동작을 생략하고 다운로드로 직행합니다.")
                 
             # 2. 다운로드 버튼 클릭 (복합 탐색 - EPO 자체 다운로드 및 크롬 PDF 열기 오버레이 모두 타격)
             try:
