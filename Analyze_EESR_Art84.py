@@ -150,10 +150,23 @@ def download_esop_from_register(driver, app_number, download_dir):
             print("  -> [성공] 'Load all pages' 버튼 클릭 완료. 전체 페이지 렌더링 중...")
             time.sleep(random.uniform(3.0, 4.5)) # 전체 페이지 렌더링을 위한 무작위 대기
             
-            # 다운로드 버튼 클릭
-            down_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[@title='Download'] | //a[@title='Download'] | //*[@id='download']")))
-            driver.execute_script("arguments[0].click();", down_btn)
-            print("  -> 문서 강제 추출(PDF 다운로드) 개시...")
+            # 다운로드 버튼 클릭 (복합 탐색 - EPO 자체 다운로드 및 크롬 PDF 열기 오버레이 모두 타격)
+            try:
+                # 1. EPO 자체 다운로드 버튼 우선 클릭
+                down_btn = driver.find_element(By.XPATH, "//button[@title='Download'] | //a[@title='Download'] | //*[@id='download']")
+                driver.execute_script("arguments[0].click();", down_btn)
+            except:
+                pass
+                
+            try:
+                time.sleep(1)
+                # 2. 크롬에 의한 PDF Intercept 발생 시 가운데 생성되는 '열기(Open)' 버튼 타격
+                open_btn = driver.find_element(By.XPATH, "//*[normalize-space(text())='열기' or contains(text(), '열기') or normalize-space(text())='Open']")
+                driver.execute_script("arguments[0].click();", open_btn)
+            except:
+                pass
+                
+            print("  -> 문서 강제 추출(PDF 다운로드/열기) 개시...")
             
         except Exception as e:
             print(f"  -> [경고] 뷰어 제어 중 오류 (단일 페이지이거나 로딩 지연): {str(e)[:40]}")
@@ -177,7 +190,10 @@ def download_esop_from_register(driver, app_number, download_dir):
                     
         # 뷰어 팝업창 닫고 메인으로 복귀
         if len(driver.window_handles) > 1:
-            driver.close()
+            try:
+                driver.execute_script("window.close();") # Webdriver close() 행 유발 버그 방지
+            except:
+                pass
             driver.switch_to.window(driver.window_handles[0])
             
         return resolved_path
