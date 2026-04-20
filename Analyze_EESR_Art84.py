@@ -124,28 +124,34 @@ def download_esop_from_register(driver, app_number, download_dir):
         # 클릭 전 현재 파일 상태 확보
         before_download_count = len(glob.glob(os.path.join(download_dir, '*.pdf')))
         
-        # 뷰어 열기 (새 탭에서 열림)
+        # 뷰어 열기 (새 탭 또는 팝업에서 열림)
+        original_window = driver.current_window_handle
         driver.execute_script("arguments[0].click();", esop_link)
         print("  -> 문서 뷰어 새 탭 대기 중...")
         
-        time.sleep(3)
-        if len(driver.window_handles) > 1:
-            driver.switch_to.window(driver.window_handles[-1])
-            try:
-                # 'Load all pages' 버튼 클릭
-                load_btn = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "a.load[title='Load all pages']")))
-                driver.execute_script("arguments[0].click();", load_btn)
-                print("  -> [성공] 'Load all pages' 버튼 클릭 완료. 전체 페이지 렌더링 중...")
-                time.sleep(random.uniform(3.0, 4.5)) # 전체 페이지 렌더링 넉넉히 대기
-                
-                # '#download' 버튼 클릭 (뷰어 상단의 내려받기 아이콘)
-                down_btn = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "#download")))
-                driver.execute_script("arguments[0].click();", down_btn)
-                print("  -> 문서 강제 추출(PDF 다운로드) 개시...")
-            except Exception as e:
-                print(f"  -> [경고] 뷰어 제어 중 오류 (단일 페이지이거나 로딩 지연): {str(e)[:40]}")
-        else:
-            print("  -> (새 창이 열리지 않음) PDF 플러그인 즉시 다운로드 대기 측면으로 진행...")
+        # 팝업 창이 뜰 때까지 명시적 대기
+        wait.until(lambda d: len(d.window_handles) > 1)
+        time.sleep(1) # 안정화
+        
+        # 새 창 핸들 획득 및 전환
+        new_window = [h for h in driver.window_handles if h != original_window][0]
+        driver.switch_to.window(new_window)
+        
+        try:
+            # 뷰어 내부 UI 접근 (명시적 XPath 사용)
+            # 'Load all pages' 버튼 클릭
+            load_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Load all pages') or @id='loadAllPages']")))
+            driver.execute_script("arguments[0].click();", load_btn)
+            print("  -> [성공] 'Load all pages' 버튼 클릭 완료. 전체 페이지 렌더링 중...")
+            time.sleep(random.uniform(3.0, 4.5)) # 전체 페이지 렌더링을 위한 무작위 대기
+            
+            # 다운로드 버튼 클릭
+            down_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[@title='Download'] | //a[@title='Download'] | //*[@id='download']")))
+            driver.execute_script("arguments[0].click();", down_btn)
+            print("  -> 문서 강제 추출(PDF 다운로드) 개시...")
+            
+        except Exception as e:
+            print(f"  -> [경고] 뷰어 제어 중 오류 (단일 페이지이거나 로딩 지연): {str(e)[:40]}")
 
         # 크롬이 문서를 다운받을 때까지 대기
         time.sleep(2)
