@@ -149,16 +149,31 @@ def download_esop_from_register(driver, app_number, download_dir):
         if new_window:
             driver.switch_to.window(new_window)
             
-            # --- PowerShell 디버깅용 UI 상태 브리핑 ---
-            time.sleep(2) # UI가 DOM에 안착할 약간의 대기
+            # --- PowerShell 디버깅용 UI 상태 브리핑 및 안정화 ---
+            try:
+                # about:blank 상태를 벗어나 실제 페이지가 로드될 때까지 최대 10초 대기
+                wait.until(lambda d: d.current_url != "about:blank" and d.execute_script("return document.readyState") == "complete")
+            except:
+                pass
+            time.sleep(2) # 렌더링 추가 대기
+            
             page_title = driver.title
+            page_url = driver.current_url
+            frames = driver.find_elements(By.TAG_NAME, "iframe") + driver.find_elements(By.TAG_NAME, "frame")
+            
             has_load_all = len(driver.find_elements(By.XPATH, "//a[contains(text(), 'Load all pages') or @id='loadAllPages']")) > 0
             has_download = len(driver.find_elements(By.XPATH, "//button[@title='Download'] | //a[@title='Download'] | //*[@id='download']")) > 0
             has_open = len(driver.find_elements(By.XPATH, "//*[normalize-space(text())='열기' or contains(text(), '열기') or normalize-space(text())='Open']")) > 0
-            print(f"  -> [UI 탐색망] 뷰어 감지 완료 (제목: '{page_title}')")
-            print(f"     |-- 'Load all pages' 버튼 존재 여부: {has_load_all}")
-            print(f"     |-- '#'Download' 버튼 존재 여부   : {has_download}")
-            print(f"     |-- '열기(Open)' 버튼 존재 여부    : {has_open}")
+            
+            print(f"  -> [UI 탐색망] 뷰어 감지 완료 (제목: '{page_title}' / URL: {page_url[:50]}...)")
+            print(f"     |-- 감지된 Frame/IFrame 갯수 : {len(frames)}개")
+            print(f"     |-- 'Load all pages' 버튼   : {has_load_all}")
+            print(f"     |-- '#'Download' 버튼        : {has_download}")
+            print(f"     |-- '열기(Open)' 버튼         : {has_open}")
+            
+            # 만약 요소가 하나도 안보이고 프레임만 있다면, 메인 UI가 프레임 안에 숨겨져 있을 확률이 큼
+            if len(frames) > 0 and not (has_load_all or has_download or has_open):
+                print("  -> [분석] 화면 요소가 보이지 않습니다. IFrame 내부를 스캔해야 할 수도 있습니다.")
             # ------------------------------------------
             # 1. 'Load all pages' 버튼 클릭 시도 (1페이지짜리 문서면 버튼이 없을 확률 99%)
             try:
