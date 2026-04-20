@@ -214,9 +214,33 @@ def download_esop_from_register(driver, app_number, download_dir):
                     
                 try:
                     time.sleep(1)
-                    # 2순위: 크롬에 의한 PDF Intercept 발생 시 가운데 생성되는 '열기(Open)' 버튼 타격
-                    open_btn = driver.find_element(By.XPATH, "//*[normalize-space(text())='열기' or contains(text(), '열기') or normalize-space(text())='Open']")
-                    driver.execute_script("arguments[0].click();", open_btn)
+                    # 2순위: IFrame 내부 투시 및 크롬 내부 UI '열기(Open)' 버튼 딥 스캔
+                    frames_to_check = driver.find_elements(By.TAG_NAME, "iframe") + driver.find_elements(By.TAG_NAME, "frame")
+                    clicked_open = False
+                    
+                    for f in frames_to_check:
+                        try:
+                            driver.switch_to.frame(f)
+                            open_btns = driver.find_elements(By.XPATH, "//*[normalize-space(text())='열기' or contains(text(), '열기') or normalize-space(text())='Open']")
+                            if open_btns:
+                                driver.execute_script("arguments[0].click();", open_btns[0])
+                                print("  -> [성공] IFrame 내부에서 '열기(Open)' 버튼을 찾아 타격했습니다!")
+                                clicked_open = True
+                            driver.switch_to.default_content()
+                            if clicked_open: break
+                        except:
+                            driver.switch_to.default_content()
+                            
+                    # 3순위: 섀도우 돔(Shadow DOM) 등 접근 불가 영역일 경우 화면 정중앙 맹폭격(ActionChains)
+                    if not clicked_open:
+                        print("  -> (DOM 은닉 감지) 화면 정중앙 '열기' 버튼 위치 범용 타격(ActionChains) 개시...")
+                        try:
+                            from selenium.webdriver.common.action_chains import ActionChains
+                            body = driver.find_element(By.TAG_NAME, "body")
+                            action = ActionChains(driver)
+                            action.move_to_element(body).click().perform()
+                        except Exception as act_e:
+                            pass
                 except:
                     pass
                     
