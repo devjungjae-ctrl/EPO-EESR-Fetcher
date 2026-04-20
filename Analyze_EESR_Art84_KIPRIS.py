@@ -130,10 +130,13 @@ def main():
         
     # 3. 순회하면서 처리
     for index, row in df.iterrows():
-        app_num = str(row['출원번호']).strip()
-        if pd.isna(app_num) or app_num == '' or app_num.lower() == 'nan':
+        raw_app_num = str(row['출원번호']).strip()
+        if pd.isna(raw_app_num) or raw_app_num == '' or raw_app_num.lower() == 'nan':
             continue
             
+        # 소수점이 있을 경우 분리 후 앞부분만 사용 (예: "18817854.5" -> "18817854")
+        app_num = raw_app_num.split('.')[0]
+        
         success = get_kipris_dossier_info(app_num)
         
         if success:

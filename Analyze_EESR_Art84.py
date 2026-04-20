@@ -213,9 +213,12 @@ def main():
 
     try:
         for idx, row in df.iterrows():
-            app_number = str(row[col_app]).strip()
-            if not app_number or app_number == 'nan':
+            raw_app_number = str(row[col_app]).strip()
+            if not raw_app_number or raw_app_number.lower() == 'nan':
                 continue
+                
+            # 소수점이 있을 경우 분리 후 앞부분만 사용 (예: "18817854.5" -> "18817854")
+            app_number = raw_app_number.split('.')[0]
                 
             print(f"\n[Run] [{idx+1}/{len(df)}] 타겟 출원번호: {app_number}")
             
