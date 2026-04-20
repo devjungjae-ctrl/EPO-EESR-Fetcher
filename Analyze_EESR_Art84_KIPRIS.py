@@ -141,7 +141,14 @@ def main():
             continue
             
         # 소수점이 있을 경우 분리 후 앞부분만 사용 (예: "18817854.5" -> "18817854")
-        app_num = raw_app_num.split('.')[0]
+        base_num = raw_app_num.split('.')[0]
+        
+        # 키프리스 문헌번호 조회를 위해 'EP' 접두사와 'A1' 접미사를 붙여 전처리 (예: "18817854" -> "EP18817854A1")
+        app_num = base_num.upper()
+        if not app_num.startswith("EP"):
+            app_num = "EP" + app_num
+        if not (app_num.endswith("A1") or app_num.endswith("A2") or app_num.endswith("B1")):
+            app_num = app_num + "A1"
         
         success = get_kipris_dossier_info(app_num)
         
