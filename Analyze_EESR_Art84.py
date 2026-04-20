@@ -148,17 +148,22 @@ def download_esop_from_register(driver, app_number, download_dir):
         
         if new_window:
             driver.switch_to.window(new_window)
+            
+            # 1. 'Load all pages' 버튼 클릭 시도 (1페이지짜리 문서면 버튼이 없을 확률 99%)
             try:
-                # 뷰어 내부 UI 접근 (명시적 XPath 사용)
-                # 'Load all pages' 버튼 클릭
-                load_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Load all pages') or @id='loadAllPages']")))
+                short_wait = WebDriverWait(driver, 5) # 5초만 빠르게 스캔
+                load_btn = short_wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Load all pages') or @id='loadAllPages']")))
                 driver.execute_script("arguments[0].click();", load_btn)
                 print("  -> [성공] 'Load all pages' 버튼 클릭 완료. 전체 페이지 렌더링 중...")
                 time.sleep(random.uniform(3.0, 4.5)) # 전체 페이지 렌더링을 위한 무작위 대기
+            except:
+                print("  -> [INFO] 'Load all pages' 버튼이 없습니다. (단일 페이지이거나 이미 전체 렌더링 됨)")
+                time.sleep(1)
                 
-                # 다운로드 버튼 클릭 (복합 탐색 - EPO 자체 다운로드 및 크롬 PDF 열기 오버레이 모두 타격)
+            # 2. 다운로드 버튼 클릭 (복합 탐색 - EPO 자체 다운로드 및 크롬 PDF 열기 오버레이 모두 타격)
+            try:
                 try:
-                    # 1. EPO 자체 다운로드 버튼 우선 클릭
+                    # 1순위: EPO 자체 다운로드 버튼 우선 클릭
                     down_btn = driver.find_element(By.XPATH, "//button[@title='Download'] | //a[@title='Download'] | //*[@id='download']")
                     driver.execute_script("arguments[0].click();", down_btn)
                 except:
@@ -166,7 +171,7 @@ def download_esop_from_register(driver, app_number, download_dir):
                     
                 try:
                     time.sleep(1)
-                    # 2. 크롬에 의한 PDF Intercept 발생 시 가운데 생성되는 '열기(Open)' 버튼 타격
+                    # 2순위: 크롬에 의한 PDF Intercept 발생 시 가운데 생성되는 '열기(Open)' 버튼 타격
                     open_btn = driver.find_element(By.XPATH, "//*[normalize-space(text())='열기' or contains(text(), '열기') or normalize-space(text())='Open']")
                     driver.execute_script("arguments[0].click();", open_btn)
                 except:
@@ -175,7 +180,7 @@ def download_esop_from_register(driver, app_number, download_dir):
                 print("  -> 문서 강제 추출(PDF 다운로드/열기) 개시...")
                 
             except Exception as e:
-                print(f"  -> [경고] 뷰어 제어 중 오류 (단일 페이지이거나 로딩 지연): {str(e)[:40]}")
+                print(f"  -> [경고] 다운로드/열기 버튼 타격 실패: {str(e)[:40]}")
         else:
             print("  -> 크롬 브라우저 설정에 의한 백그라운드 자동 다운로드가 발생했습니다.")
         # 크롬이 문서를 다운받을 때까지 대기
