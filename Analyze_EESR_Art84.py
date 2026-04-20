@@ -5,13 +5,10 @@ import time
 import glob
 import google.generativeai as genai
 import fitz  # PyMuPDF
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
+import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
 
 # ==========================================
 # 0. API & 환경 설정
@@ -24,9 +21,9 @@ genai.configure(api_key=GEMINI_API_KEY)
 gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest')
 
 def setup_chrome_driver(download_dir):
-    """지정된 폴더로 자동 다운로드하도록 크롬 드라이버 설정"""
-    options = Options()
-    # options.add_argument("--headless")  # 헤드리스 모드 해제: 파일 다운로드 차단 회피 위해 시각적 구동
+    """undetected_chromedriver를 활용하여 봇 탐지 우회"""
+    options = uc.ChromeOptions()
+    # 봇 탐지 우회를 위해 헤드리스 모드는 쓰지 않는 것을 권장
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--start-maximized")
@@ -39,9 +36,8 @@ def setup_chrome_driver(download_dir):
     }
     options.add_experimental_option("prefs", prefs)
     
-    # 크롬 구동
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=options)
+    # undetected 크롬 구동
+    driver = uc.Chrome(options=options)
     return driver
 
 def wait_for_download(download_dir, timeout=30):
