@@ -1,11 +1,17 @@
 import os
 import re
 import pandas as pd
-import requests
-import base64
 import time
+import glob
 import google.generativeai as genai
 import fitz  # PyMuPDF
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
 
 # ==========================================
 # 0. API & 환경 설정
@@ -13,56 +19,118 @@ import fitz  # PyMuPDF
 # Gemini API Key (제공해주신 키 연동 완료)
 GEMINI_API_KEY = "발급받은_GEMINI_API_KEY_여기에_붙여넣기"
 
-# EPO OPS API Key (별도로 발급받으신 Key/Secret 기입 필요)
-# 발급 사이트: developers.epo.org
-# 참고: 브라우저 에이전트로 인한 IP 차단 이슈로 부득이 직접 기입하시도록 공란으로 비워두었습니다.
-EPO_CONSUMER_KEY = "여기에_CONSUMER_KEY_입력"
-EPO_CONSUMER_SECRET = "여기에_CONSUMER_SECRET_입력"
-# ==========================================
-
 genai.configure(api_key=GEMINI_API_KEY)
 # 모델 선택 (텍스트 분류/분석에 뛰어난 1.5-flash-latest 사용)
 gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest')
 
-def get_epo_token(client_id, client_secret):
-    """EPO OPS API OAuth 토큰 발급"""
-    try:
-        url = "https://ops.epo.org/3.2/auth/accesstoken"
-        auth_string = f"{client_id}:{client_secret}"
-        encoded_auth = base64.b64encode(auth_string.encode()).decode()
-        
-        headers = {
-            "Authorization": f"Basic {encoded_auth}",
-            "Content-Type": "application/x-www-form-urlencoded"
-        }
-        data = {"grant_type": "client_credentials"}
-        response = requests.post(url, headers=headers, data=data)
-        response.raise_for_status()
-        return response.json().get("access_token")
-    except Exception as e:
-        print(f"[ERROR] EPO 토큰 발급 실패 (API 키 설정을 확인하세요): {e}")
-        return None
+def setup_chrome_driver(download_dir):
+    """지정된 폴더로 자동 다운로드하도록 크롬 드라이버 설정"""
+    options = Options()
+    # options.add_argument("--headless")  # 헤드리스 모드 해제: 파일 다운로드 차단 회피 위해 시각적 구동
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--start-maximized")
+    
+    prefs = {
+        "download.default_directory": download_dir,
+        "download.prompt_for_download": False,
+        "download.directory_upgrade": True,
+        "plugins.always_open_pdf_externally": True  # Chrome 내장 뷰어 대신 바로 다운로드
+    }
+    options.add_experimental_option("prefs", prefs)
+    
+    # 크롬 구동
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=options)
+    return driver
 
-def download_eesr_pdf(app_number, token, save_dir):
-    """
-    EPO OPS에서 EESR PDF 문서를 다운로드하는 함수 로직.
-    실제 현업에서는 EPO OPS의 Published Data 또는 Global Dossier API를 통해 문서 ID를 찾아와야 합니다.
-    """
-    if not token:
+def wait_for_download(download_dir, timeout=30):
+    """다운로드가 완료될 때까지 크롬 임시 확장자(.crdownload)가 없어지길 대기"""
+    seconds = 0
+    while seconds < timeout:
+        time.sleep(1)
+        if any(filename.endswith(".crdownload") for filename in os.listdir(download_dir)):
+            seconds += 1
+        else:
+            return True
+    return False
+
+def get_latest_pdf(download_dir):
+    """가장 최근에 다운로드된 PDF 파일 경로 반환"""
+    list_of_files = glob.glob(os.path.join(download_dir, '*.pdf'))
+    if not list_of_files:
         return None
+    latest_file = max(list_of_files, key=os.path.getmtime)
+    return latest_file
+
+def download_eesr_pdf_selenium(driver, app_number, download_dir):
+    """
+    Selenium을 사용하여 EPO Register에서 EESR PDF를 다운로드합니다.
+    """
+    print(f"  -> [{app_number}] Selenium 브라우저 우회로 EPO Register 검색 중...")
+    
+    # 번호 처리 (EP prefix가 없으면 붙여서 검색 안전성을 높임)
+    search_num = str(app_number).replace(" ", "").upper()
+    if not search_num.startswith("EP"):
+        search_num = "EP" + search_num
+
+    # 1. 문서 검색 페이지 접속
+    url = f"https://register.epo.org/application?number={search_num}"
+    driver.get(url)
+    
+    try:
+        # 'All documents' 탭이 보일 때까지 대기 후 클릭
+        wait = WebDriverWait(driver, 10)
+        docs_tab = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(@href, 'tab=doclist')]")))
+        docs_tab.click()
         
-    pdf_path = os.path.join(save_dir, f"{app_number}_EESR.pdf")
-    
-    # [개발 로직 가이드] 
-    # 1. biblio Search API를 통해 해당 출원번호의 document ID 리스트업
-    # 2. Description이 "Search Report" 또는 EESR인 document ID 파악
-    # 3. images API를 통해 다운로드 및 병합하여 PDF로 조합
-    
-    print(f"  -> [{app_number}] EPO API 연동하여 PDF 다운로드 진행 중 (구조화됨)...")
-    
-    if os.path.exists(pdf_path):
-        return pdf_path
-    return None 
+        # 2. 문서 리스트 화면에서 'Search Report' 텍스트 찾기
+        time.sleep(3) # 테이블 로딩 대기
+        
+        # 테이블 내 텍스트 매칭
+        doc_links = driver.find_elements(By.XPATH, "//td[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'search report')]/following-sibling::td//a[contains(@href, 'document')] | //td[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'search report')]/preceding-sibling::td//a[contains(@href, 'document')]")
+        
+        if not doc_links:
+            # 경우에 따라 텍스트가 다를 수 있으므로 폭넓은 XPATH 보조 탐색
+            all_links = driver.find_elements(By.XPATH, "//table[@id='doclist']//tr")
+            found = False
+            for row in all_links:
+                if "search report" in row.text.lower():
+                    pdf_btn = row.find_element(By.XPATH, ".//a[contains(@href, 'document')]")
+                    pdf_btn.click()
+                    found = True
+                    break
+            
+            if not found:
+                print("  -> 결과 페이지 내 Search Report 링크를 찾지 못했습니다.")
+                return None
+        else:
+            # 첫번째 (보통 가장 최신 또는 전체 EESR인 것) 클릭
+            doc_links[0].click()
+            
+        print("  -> PDF 다운로드 버튼 클릭 완료. 파일 저장 대기 중...")
+        
+        # 다운로드 완료 대기
+        wait_for_download(download_dir)
+        
+        # 가장 최근 생성된 파일명 확인 후 식별하기 쉽게 Rename
+        time.sleep(1.5)
+        latest_pdf = get_latest_pdf(download_dir)
+        
+        if latest_pdf:
+            new_name = os.path.join(download_dir, f"{app_number}_EESR.pdf")
+            # 이미 있으면 덮어쓰기 위해 삭제
+            if os.path.exists(new_name):
+                os.remove(new_name)
+            os.rename(latest_pdf, new_name)
+            return new_name
+        else:
+            print("  -> 다운로드 폴더에서 PDF를 획득 조작 실패.")
+            return None
+            
+    except Exception as e:
+        print(f"  -> 브라우저 검색 실패 (문서 없음 또는 로딩 지연): {e}")
+        return None
 
 def extract_pdf_text_and_check_art84(pdf_path):
     """PDF에서 텍스트를 추출하고 Article 84 언급 여부를 다각적 정규표현식으로 확인"""
@@ -112,23 +180,23 @@ def classify_art84_with_gemini(text):
         return "분류 에러"
 
 def main():
+    base_dir = os.path.dirname(os.path.abspath(__file__))
     desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
     excel_path = os.path.join(desktop_path, "특허검색_EESR검색.xlsx")
-    output_excel_path = os.path.join(desktop_path, "특허검색_EESR검색_분류결과.xlsx")
-    pdf_save_dir = os.path.join(desktop_path, "EESR_Downloads")
+    output_excel_path = os.path.join(desktop_path, "특허검색_EESR검색_분류결과_Selenium.xlsx")
+    pdf_save_dir = os.path.join(base_dir, "EESR_Downloads_Selenium")
     
     os.makedirs(pdf_save_dir, exist_ok=True)
     
     if not os.path.exists(excel_path):
         print(f"[ERROR] 바탕화면에 '{os.path.basename(excel_path)}' 파일이 없습니다!")
-        # 테스트 실행을 막지 않기 위해 함수를 바로 종료하지는 않고 모의 진행 안내
         print("[INFO] [테스트 모드]: 샘플 Dataframe을 생성하여 진행합니다.")
-        df = pd.DataFrame({'출원번호': ['EP20123456', 'EP20987654']})
+        df = pd.DataFrame({'출원번호': ['20123456', '20987654']})
     else:
         print("엑셀 파일을 불러오는 중...")
         df = pd.read_excel(excel_path)
     
-    # 엑셀 열에 출원번호가 있는지 체크 ('출원번호' 로 가정)
+    # 엑셀 열에 출원번호가 있는지 체크
     col_app = None
     for col in df.columns:
         if "출원" in str(col) or "Application" in str(col):
@@ -139,58 +207,55 @@ def main():
         print("[ERROR] '출원번호' 관련 열을 찾을 수 없습니다. (열 이름 확인 필요)")
         return
 
-    # 결과 저장을 위한 빈 열 생성
     if 'Article84_여부' not in df.columns:
         df['Article84_여부'] = "조사안됨"
     if '거절사유_유형분류' not in df.columns:
         df['거절사유_유형분류'] = ""
 
-    # EPO Token 발급
-    print("\n[EPO 토큰 발급 시도 중...]")
-    epo_token = get_epo_token(EPO_CONSUMER_KEY, EPO_CONSUMER_SECRET)
-    if epo_token:
-        print("[OK] EPO 토큰 발급 성공!")
-    else:
-        print("[WARNING] EPO 토큰 값이 유효하지 않아 로컬 폴더(EESR_Downloads) 내 다운로드된 PDF만 검사합니다.")
+    print("\n[크롬 드라이버 초기화 중... 최초 1회 빈 창이 뜰 수 있습니다]")
+    driver = setup_chrome_driver(pdf_save_dir)
 
-    for idx, row in df.iterrows():
-        app_number = str(row[col_app]).strip()
-        if not app_number or app_number == 'nan':
-            continue
+    try:
+        for idx, row in df.iterrows():
+            app_number = str(row[col_app]).strip()
+            if not app_number or app_number == 'nan':
+                continue
+                
+            print(f"\n[Run] [{idx+1}/{len(df)}] 타겟 출원번호: {app_number}")
             
-        print(f"\n[Run] [{idx+1}/{len(df)}] 타겟 출원번호: {app_number}")
+            # 1. Selenium으로 EESR PDF 다운로드
+            pdf_file = download_eesr_pdf_selenium(driver, app_number, pdf_save_dir)
+            
+            fallback_pdf = os.path.join(pdf_save_dir, f"{app_number}_EESR.pdf")
+            if not pdf_file and os.path.exists(fallback_pdf):
+                pdf_file = fallback_pdf
+                
+            if not pdf_file:
+                print("  -> EESR PDF 문서를 다운로드/찾을 수 없어 Skip 합니다.")
+                df.at[idx, 'Article84_여부'] = "PDF없음"
+                continue
+                
+            # 2. PDF 파싱 및 Article 84 체크
+            is_art84, extract_txt = extract_pdf_text_and_check_art84(pdf_file)
+            
+            if is_art84:
+                print("  -> [HIT] Article 84 (A.84 등) 관련 거절 발견! Gemini 분류 시작...")
+                df.at[idx, 'Article84_여부'] = "존재(Yes)"
+                
+                # 3. Gemini로 분류 (API 속도 제한 고려 delay)
+                time.sleep(2)
+                class_result = classify_art84_with_gemini(extract_txt)
+                print(f"  -> {class_result[:60]}...")
+                df.at[idx, '거절사유_유형분류'] = class_result
+                
+            else:
+                print("  -> 기술된 텍스트 중 Article 84 거절 조항이 없어 패스합니다.")
+                df.at[idx, 'Article84_여부'] = "없음(No)"
+                df.at[idx, '거절사유_유형분류'] = "Skip"
+                
+    finally:
+        driver.quit()
         
-        # 1. EESR PDF 다운로드 (API 또는 로컬 파일)
-        pdf_file = download_eesr_pdf(app_number, epo_token, pdf_save_dir)
-        
-        # 다운로드를 못했더라도 EESR_Downloads 폴더에 파일이 손수 있으면 읽도록 fallback
-        fallback_pdf = os.path.join(pdf_save_dir, f"{app_number}.pdf")
-        if not pdf_file and os.path.exists(fallback_pdf):
-            pdf_file = fallback_pdf
-            
-        if not pdf_file:
-            print("  -> EESR PDF 문서를 다운로드/찾을 수 없어 Skip 합니다.")
-            df.at[idx, 'Article84_여부'] = "PDF없음"
-            continue
-            
-        # 2. PDF 파싱 및 Article 84 체크
-        is_art84, extract_txt = extract_pdf_text_and_check_art84(pdf_file)
-        
-        if is_art84:
-            print("  -> [HIT] Article 84 (A.84 등) 관련 거절 발견! Gemini 분류 시작...")
-            df.at[idx, 'Article84_여부'] = "존재(Yes)"
-            
-            # 3. Gemini로 분류 (API 속도 제한 고려 delay)
-            time.sleep(2)
-            class_result = classify_art84_with_gemini(extract_txt)
-            print(f"  -> {class_result[:60]}...")
-            df.at[idx, '거절사유_유형분류'] = class_result
-            
-        else:
-            print("  -> 기술된 텍스트 중 Article 84 거절 조항이 없어 패스합니다.")
-            df.at[idx, 'Article84_여부'] = "없음(No)"
-            df.at[idx, '거절사유_유형분류'] = "Skip"
-            
     # 최종 결과 저장
     try:
         df.to_excel(output_excel_path, index=False)
