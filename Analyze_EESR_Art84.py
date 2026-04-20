@@ -37,13 +37,18 @@ def setup_epo_register_driver(download_dir):
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--start-maximized")
+    # 팝업 차단 방지: 뷰어 팝업이 Chrome 정책에 의해 막히는 빈도를 줄임
+    options.add_argument("--disable-popup-blocking")
     
     # 클릭 시 새 탭이 열리거나 PDF를 뷰어로 열지 않고 즉각 다운로드 폴더로 강제 전송
     prefs = {
         "download.default_directory": download_dir,
         "download.prompt_for_download": False,
         "download.directory_upgrade": True,
-        "plugins.always_open_pdf_externally": True
+        "plugins.always_open_pdf_externally": True,
+        # 팝업 및 자동 다운로드 무조건 허용
+        "profile.default_content_setting_values.popups": 1,
+        "profile.default_content_setting_values.automatic_downloads": 1
     }
     options.add_experimental_option("prefs", prefs)
     
