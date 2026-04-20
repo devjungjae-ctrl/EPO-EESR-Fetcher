@@ -34,12 +34,13 @@ def get_kipris_dossier_info(app_num):
     """
     print(f"[{app_num}] KIPRIS API 서버에 데이터 요청 중...")
     
-    # 1. 서지정보 조회 (ForeignPatentGeneralSearchService) 등 기본 호출
-    # (주의: 향후 KIPRISPlus 정책에 따라 포괄문헌 API URL은 opdService 등으로 변경될 수 있음)
-    base_url = "http://plus.kipris.or.kr/openapi/rest/ForeignPatentGeneralSearchService/wordSearch"
+    # 1. 서지상세정보 조회 (ForeignPatentBibliographicService)
+    # 문헌번호(literatureNumber)와 국가코드(countryCode)를 파라미터로 사용합니다.
+    base_url = "http://plus.kipris.or.kr/openapi/rest/ForeignPatentBibliographicService/bibliographicInfo"
     params = {
         "accessKey": KIPRIS_API_KEY,
-        "word": app_num
+        "literatureNumber": app_num,
+        "countryCode": "EP"
     }
     
     try:
