@@ -257,8 +257,10 @@ def download_esop_from_register(driver, app_number, lg_ref, download_dir):
             time.sleep(1) # 최종 저장 딜레이
             latest_pdf = get_latest_pdf(download_dir)
             if latest_pdf:
+                # 윈도우 파일명 금지 문자 제거 (슬래시 등 방어)
+                safe_lg_ref = re.sub(r'[\\/*?:"<>|]', '_', str(lg_ref))
                 # 최신 PDF를 우리가 원하는 출원번호_LGREF 형태로 저장
-                new_name = os.path.join(download_dir, f"{app_num_clean}_{lg_ref}_ESOP_Original.pdf")
+                new_name = os.path.join(download_dir, f"{app_num_clean}_{safe_lg_ref}_ESOP_Original.pdf")
                 if os.path.exists(new_name):
                     try: os.remove(new_name)
                     except: pass
@@ -368,7 +370,9 @@ def main():
             # 폴백(수동 저장) 체크
             app_clean = raw_app_num.split('.')[0]
             if not app_clean.startswith("EP"): app_clean = "EP" + app_clean
-            fallback_pdf = os.path.join(DOWNLOAD_DIR, f"{app_clean}_{raw_lg_ref}_ESOP_Original.pdf")
+            
+            safe_lg_ref = re.sub(r'[\\/*?:"<>|]', '_', raw_lg_ref)
+            fallback_pdf = os.path.join(DOWNLOAD_DIR, f"{app_clean}_{safe_lg_ref}_ESOP_Original.pdf")
             
             if not pdf_path and os.path.exists(fallback_pdf):
                 pdf_path = fallback_pdf
