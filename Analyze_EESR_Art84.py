@@ -3,9 +3,12 @@ import re
 import glob
 import time
 import random
+import base64
+import requests
 import pandas as pd
 import fitz  # PyMuPDF
 import google.generativeai as genai
+import concurrent.futures
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -24,9 +27,13 @@ uc.Chrome.quit = safe_quit
 # 0. API & 환경 설정
 # ==========================================
 # Google Gemini API
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "발급받은_GEMINI_API_KEY_여기에_붙여넣기")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "여기에_제공받은_GEMINI_API_KEY를_붙여넣으세요")
 genai.configure(api_key=GEMINI_API_KEY)
 gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest')
+
+# Google Cloud Vision API (OCR용)
+# 환경 변수에 없으면 소스 코드에 직접 기입된 키 사용
+VISION_API_KEY = os.environ.get("VISION_API_KEY", "여기에_제공받은_VISION_API_KEY를_붙여넣으세요")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DOWNLOAD_DIR = os.path.join(BASE_DIR, "EESR_Downloads_ESOP")
@@ -299,22 +306,75 @@ def download_esop_from_register(driver, app_number, lg_ref, download_dir):
 # ==========================================
 # 3. 텍스트 추출 및 심층 NLP 분석
 # ==========================================
+def ocr_page_with_vision_api(image_bytes):
+    """
+    Google Cloud Vision REST API를 직접 호출하여 단일 이미지(바이트)의 텍스트를 추출합니다.
+    """
+    url = f"https://vision.googleapis.com/v1/images:annotate?key={VISION_API_KEY}"
+    payload = {
+        "requests": [
+            {
+                "image": {"content": base64.b64encode(image_bytes).decode('utf-8')},
+                "features": [{"type": "DOCUMENT_TEXT_DETECTION"}]
+            }
+        ]
+    }
+    
+    try:
+        response = requests.post(url, json=payload, timeout=30)
+        res_json = response.json()
+        if "responses" in res_json and len(res_json["responses"]) > 0:
+            if "fullTextAnnotation" in res_json["responses"][0]:
+                return res_json["responses"][0]["fullTextAnnotation"]["text"]
+    except Exception as e:
+        print(f"      [OCR 에러] API 호출 실패: {e}")
+    return ""
+
 def extract_pdf_and_check_art84(pdf_path):
     try:
         doc = fitz.open(pdf_path)
         full_text = ""
-        # ESOP 문서의 경우 심사관 논리가 문서 전반에 적혀 있으므로 전체 스캔
+        
+        # 1. 일반 디지털 텍스트 추출 시도
         for page in doc:
             full_text += page.get_text("text") + "\n"
+            
+        # 2. 판독: 추출된 글자 수가 200자 미만이거나 공백을 제외하고 텅 비어있으면 스캔본으로 간주!
+        alpha_text = re.sub(r'[^a-zA-Z]', '', full_text)
+        if len(alpha_text) < 200:
+            print("  -> [Hybrid OCR 가동] 문서가 스캔 이미지(구형 서면 형태)로 감지되었습니다. Vision API 병렬 번역을 시작합니다...")
+            ocr_text_parts = []
+            
+            # 페이지를 메모리 상 PNG 이미지 바이트로 렌더링하는 함수
+            def process_page(page_num):
+                page = doc.load_page(page_num)
+                pix = page.get_pixmap(dpi=150) # 150 DPI면 OCR에 충분
+                img_bytes = pix.tobytes("png")
+                text = ocr_page_with_vision_api(img_bytes)
+                return page_num, text
+                
+            # 쓰레드풀을 사용한 병렬 OCR (최대 30장 동시 처리)
+            # 사용자의 문서들이 최대 30장이므로 병렬화의 이점을 극대화함
+            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                futures = [executor.submit(process_page, i) for i in range(len(doc))]
+                results = []
+                for future in concurrent.futures.as_completed(futures):
+                    results.append(future.result())
+            
+            # 페이지 순서대로 텍스트 결합
+            results.sort(key=lambda x: x[0])
+            full_text = "\n".join([res[1] for res in results])
+            print("  -> OCR 텍스트 구조화 완료!")
+            
         doc.close()
         
-        # Art 84, Article 84, A.84 
-        pattern = r"\b(?:Article|Art\.?|A\.?)\s*84\b"
+        # Article 84, Art. 84, A. 84, Articles 83 and 84, Art. 84 EPC 등 모든 경우의 수 허용 (복구된 강력 패턴)
+        pattern = r"\b(?:Article|Art|A|Arts|Articles)\.?[\s\S]{0,40}?\b84\b"
         if re.search(pattern, full_text, re.IGNORECASE):
             return True, full_text
         return False, full_text
     except Exception as e:
-        print(f"  -> PDF 디코딩 실패: {e}")
+        print(f"  -> PDF 디코딩/OCR 실패: {e}")
         return False, ""
 
 def analyze_with_gemini(text):
@@ -323,22 +383,32 @@ def analyze_with_gemini(text):
     이 의견서에서 'Article 84'를 적용하여 지적하거나 거절한 사유가 정확히 무엇인지 파악하고, 
     반드시 다음 4가지 카테고리 중 **하나로만** 답하세요. (응답 예시: 1. 명확성 부족)
     
-    분류 기준:
+    [분류 기준]
     1. 명확성 부족 (Lack of Clarity)
+       - 용어의 모호성: "약(about)", "상당히(substantially)", "적절한(suitable)"과 같은 상대적이거나 불확실한 용어를 사용했을 때
+       - 기술적 특징의 결여: 발명을 정의하는 데 필요한 핵심적 특징(Essential features)이 청구항에 빠져 있어 발명의 범위가 모호할 때
+       - 선택적 특징: "바람직하게는(preferably)", "선택적으로(optionally)"와 같은 표현이 청구항의 범위를 불분명하게 만든다고 판단될 때
+       
     2. 명세서에 의한 뒷받침 부족 (Lack of Support)
+       - 일치성 위반: 청구항의 범위가 발명의 상세한 설명에서 공개된 범위를 넘어설 때
+       - 불일치(Inconsistency): 명세서에서는 특정 구성이 필수라고 설명하면서 청구항에서는 이를 포함하지 않는 경우, 또는 명세서의 실시예와 청구항의 용어가 서로 상충하는 경우
+       
     3. 간결성 및 청구항 수 (Conciseness & Number of Claims)
+       - 동일한 발명에 대해 독립항이 과도하게 많거나 (Rule 62a), 청구항의 내용이 중복되어 권리 범위를 파악하기 힘들 때 (EPC Rule 29(5) 및 Article 84 위반)
+       
     4. 기타
+       - 위 3가지에 명확히 해당하지 않는 다른 종류의 Article 84 거절 사유
     
-    [문헌 텍스트 (앞 8000글자)]
-    {text[:8000]}
+    [문헌 텍스트]
+    {text[:12000]}  # 문헌이 길어질 수 있으므로 OCR 등 고려하여 최대 12000자 반영
     """
     try:
         res = gemini_model.generate_content(prompt)
         text_result = res.text.strip()
-        if "명확성 부족" in text_result or "Lack of Clarity" in text_result: return "명확성 부족"
-        elif "뒷받침 부족" in text_result or "Lack of Support" in text_result: return "뒷받침 부족"
-        elif "간결성" in text_result or "Conciseness" in text_result: return "간결성"
-        elif "기타" in text_result or "Other" in text_result: return "기타"
+        if "명확성 부족" in text_result or "Lack of Clarity" in text_result or "1." in text_result: return "명확성 부족"
+        elif "뒷받침 부족" in text_result or "Lack of Support" in text_result or "2." in text_result: return "뒷받침 부족"
+        elif "간결성" in text_result or "Conciseness" in text_result or "3." in text_result: return "간결성"
+        elif "기타" in text_result or "Other" in text_result or "4." in text_result: return "기타"
         else: return "조항 84 기반 지적 모호"
     except Exception as e:
         return f"분석 오류: {e}"
