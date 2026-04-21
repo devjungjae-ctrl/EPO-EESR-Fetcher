@@ -11,6 +11,15 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
+# uc.Chrome quit() 윈도우 OSError 빈출 버그(WinError 6) 방지 패치
+original_quit = uc.Chrome.quit
+def safe_quit(self):
+    try:
+        original_quit(self)
+    except Exception:
+        pass
+uc.Chrome.quit = safe_quit
+
 # ==========================================
 # 0. API & 환경 설정
 # ==========================================
