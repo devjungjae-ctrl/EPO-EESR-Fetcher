@@ -164,8 +164,8 @@ def download_esop_from_register(driver, app_number, lg_ref, download_dir):
             
             # --- PowerShell 디버깅용 UI 상태 브리핑 및 안정화 ---
             try:
-                # about:blank 상태를 벗어나 실제 페이지가 로드될 때까지 최대 10초 대기
-                wait.until(lambda d: d.current_url != "about:blank" and d.execute_script("return document.readyState") == "complete")
+                # about:blank 나 chrome://new-tab-page 상태를 벗어나 실제 페이지(register.epo.org 등)가 로드될 때까지 최대 15초 대기
+                wait.until(lambda d: ("http" in d.current_url or "register.epo.org" in d.current_url) and d.execute_script("return document.readyState") == "complete")
             except:
                 pass
             time.sleep(2) # 렌더링 추가 대기
