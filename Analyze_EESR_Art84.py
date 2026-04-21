@@ -339,9 +339,12 @@ def extract_pdf_and_check_art84(pdf_path):
         for page in doc:
             full_text += page.get_text("text") + "\n"
             
-        # 2. 판독: 추출된 글자 수가 200자 미만이거나 공백을 제외하고 텅 비어있으면 스캔본으로 간주!
+        # 2. 판독: 추출된 글자의 '페이지 당 밀도'가 300자 미만이면 스캔본으로 간주!
+        # (첫 표지만 텍스트이고 나머지가 스캔본인 경우를 완벽히 잡아내기 위해 평균 밀도 연산)
         alpha_text = re.sub(r'[^a-zA-Z]', '', full_text)
-        if len(alpha_text) < 200:
+        page_count = max(len(doc), 1)
+        
+        if (len(alpha_text) / page_count) < 300:
             print("  -> [Hybrid OCR 가동] 문서가 스캔 이미지(구형 서면 형태)로 감지되었습니다. Vision API 병렬 번역을 시작합니다...")
             ocr_text_parts = []
             
